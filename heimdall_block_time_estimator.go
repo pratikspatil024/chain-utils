@@ -23,10 +23,10 @@ import (
 )
 
 const (
-	targetBlock = 8788500
+	targetBlock = 13143851
 
 	// to get the latest block
-	latestSpanURL = "https://heimdall-api-amoy.polygon.technology/bor/latest-span"
+	latestSpanURL = "https://heimdall-api-amoy.polygon.technology/bor/spans/latest"
 
 	// to get the block creation time
 	blockTimeURL = "https://tendermint-api-amoy.polygon.technology/block?height=%d"
@@ -90,27 +90,28 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Println("Amoy Apocoplypse height:", targetBlock)
 	fmt.Println("Current height:", h1)
 
 	t1, err := fetchBlockTime(h1)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Current block time:", t1)
+	// fmt.Println("Current block time:", t1)
 
 	t2, err := fetchBlockTime(h1 - 2000)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println("Block time 2000 blocks ago:", t2)
+	// fmt.Println("Block time 2000 blocks ago:", t2)
 
 	// Compute average block time
 	avgBlockTime := t1.Sub(t2).Seconds() / 2000.0
-	fmt.Printf("Average block time: %.2f seconds\n", avgBlockTime)
+	fmt.Printf("Average block time of last 2000 blocks: %.2f seconds\n", avgBlockTime)
 
 	blocksLeft := targetBlock - h1
 	secondsLeft := avgBlockTime * float64(blocksLeft)
 
 	estimatedTime := t1.Add(time.Duration(secondsLeft) * time.Second)
-	fmt.Println("Estimated block mining time:", estimatedTime.Format(time.RFC3339Nano))
+	fmt.Println("Estimated time of apocoplypse:", estimatedTime.Format(time.RFC3339Nano))
 }
