@@ -8,47 +8,60 @@ A personal collection of blockchain infrastructure scripts and utilities — bui
 
 | Script | Description |
 |--------|-------------|
-| `heimdall_block_time_estimator.go` | Estimates the future mining time of a specific block on the Heimdall chain using public APIs. |
+| `bor_average_blocktime_calculator.go` | Calculates the average block time over the last 40k, 280k, 560k, and 1.12M blocks on the Bor chain. Useful for chain health monitoring and block production analysis. |
+| `bor_hf_block_calculator.go` | Predicts the block height corresponding to a future target UTC time given an assumed average block time for the Bor chain (e.g. planning for hardforks or upgrades). |
 | `heimdall_average_blocktime_calculator.go` | Calculates the average block time over the last 10k, 100k, 1M, and 1.5M blocks. Useful for chain health monitoring and block production analysis. |
 | `heimdall_hf_block_calculator.go`        | Predicts the block height corresponding to a future target UTC time given an assumed average block time (e.g. planning for hardforks or upgrades). |
-| (More coming idk when...) | Planning to add Bor tools, validator metrics fetchers, and health checkers. |
 
 ---
 
 ## 🚀 Quick Start
 
-### Example 1: Estimate Heimdall Block ETA
+### Example 1: Calculate Bor Average Block Times
 
 ```bash
-go run heimdall_block_time_estimator.go
+go run bor_average_blocktime_calculator.go
 ```
 
 This script
-- Fetches the latest block height and timestamp from Heimdall APIs
-- Calculates average block time over the past 2000 blocks
-- Predicts when a future block (e.g. 8788500) will be mined
+- Fetches the latest block height and timestamp from Bor RPC
+- For each lookback (40k, 280k, 560k, 1.12M blocks), fetches a past block
+- Prints elapsed time (days/hours/minutes/seconds) and average block time in seconds
 
 
-### Example 2: Calculate Average Block Times
+### Example 2: Predict Bor Block Height at a Future Time
+
+```bash
+go run bor_hf_block_calculator.go
+```
+
+This script
+- Fetches the latest block height and timestamp from Bor RPC
+- Uses a configurable target UTC timestamp and average block time
+- Calculates how many blocks fit in the delta between now and target
+- Prints the predicted block height and time delta
+
+
+### Example 3: Calculate Heimdall Average Block Times
 
 ```bash
 go run heimdall_average_blocktime_calculator.go
 ```
 
 This script
-- Fetches the latest block height and timestamp
+- Fetches the latest block height and timestamp from Heimdall APIs
 - For each lookback (10k, 100k, 1M, 1.5M blocks), fetches a past block
 - Prints elapsed time (days/hours/minutes/seconds) and average block time in seconds
 
 
-### Example 3: Predict Block Height at a Future Time
+### Example 4: Predict Heimdall Block Height at a Future Time
 
 ```bash
 go run heimdall_hf_block_calculator.go
 ```
 
 This script
-- Fetches the latest block height and timestamp
+- Fetches the latest block height and timestamp from Heimdall APIs
 - Uses a hardcoded target UTC timestamp and an average block time (in seconds)
 - Calculates how many blocks fit in the delta between now and target
 - Prints the predicted block height and time delta
