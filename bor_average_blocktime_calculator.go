@@ -1,5 +1,5 @@
-// go run bor_average_blocktime_calculator.go
-// go run bor_average_blocktime_calculator.go -rpc="https://polygon-rpc.com"
+// go run bor_average_blocktime_calculator.go -rpc="$BOR_MAINNET_RPC"
+// go run bor_average_blocktime_calculator.go help
 
 package main
 
@@ -14,16 +14,16 @@ import (
 	"math/big"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	defaultRPC   = "https://polygon-rpc.com"
-	jsonrpcVer   = "2.0"
-	httpTimeout  = 20 * time.Second
-	maxRetries   = 3
-	retryBackoff = 600 * time.Millisecond
+	defaultLookbacks = "40000,280000,560000,1120000"
+	jsonrpcVer       = "2.0"
+	maxRetries       = 3
+	retryBackoff     = 600 * time.Millisecond
 )
 
 type rpcRequest struct {
@@ -49,10 +49,40 @@ type block struct {
 }
 
 func main() {
-	rpcURL := flag.String("rpc", defaultRPC, "Polygon (Bor) JSON-RPC endpoint")
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	rpcURL := fs.String("rpc", "", "Bor JSON-RPC endpoint")
+	lookbacksFlag := fs.String("lookbacks", defaultLookbacks, "Comma-separated block lookbacks to average")
+	timeout := fs.Duration("timeout", 20*time.Second, "HTTP request timeout")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  go run bor_average_blocktime_calculator.go -rpc=<bor-rpc-url> [options]\n  go run bor_average_blocktime_calculator.go help\n\n")
+		fmt.Fprintln(fs.Output(), "Calculates Bor average block time from the latest block back to each configured lookback height.")
+		fmt.Fprintln(fs.Output(), "\nRequired:")
+		fmt.Fprintln(fs.Output(), "  -rpc string")
+		fmt.Fprintln(fs.Output(), "        Bor JSON-RPC endpoint for the network being scheduled")
+		fmt.Fprintln(fs.Output(), "\nOptions:")
+		fs.PrintDefaults()
+		fmt.Fprintln(fs.Output(), "\nExamples:")
+		fmt.Fprintln(fs.Output(), "  BOR_MAINNET_RPC=https://your-mainnet-bor-rpc.example")
+		fmt.Fprintln(fs.Output(), "  go run bor_average_blocktime_calculator.go -rpc=$BOR_MAINNET_RPC")
+		fmt.Fprintln(fs.Output(), "  go run bor_average_blocktime_calculator.go -rpc=https://rpc-amoy.polygon.technology -lookbacks=10000,50000,100000")
+	}
+	if len(os.Args) > 1 && isHelpCommand(os.Args[1]) {
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		failf("%v", err)
+	}
+	if strings.TrimSpace(*rpcURL) == "" {
+		failf("missing required -rpc\n\nProvide the Bor JSON-RPC endpoint for the network being measured.\nExamples:\n  mainnet: -rpc=https://your-mainnet-bor-rpc.example\n  amoy   : -rpc=https://rpc-amoy.polygon.technology\n\nRun `go run bor_average_blocktime_calculator.go help` for all options.")
+	}
 
-	client := &http.Client{Timeout: httpTimeout}
+	lookbacks, err := parseLookbacks(*lookbacksFlag)
+	if err != nil {
+		failf("parse lookbacks: %v", err)
+	}
+
+	client := &http.Client{Timeout: *timeout}
 	ctx := context.Background()
 
 	// 1) latest block n
@@ -62,21 +92,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 2) targets {n, n-40000, n-280000, n-560000, n-1120000}
-	targets := []target{
-		{kind: "relative", delta: 0},
-		{kind: "relative", delta: -40000},
-		{kind: "relative", delta: -280000},
-		{kind: "relative", delta: -560000},
-		{kind: "relative", delta: -1120000},
-	}
-
 	// Resolve valid heights (skip negatives/future)
 	var heights []uint64
-	for _, t := range targets {
-		if h, ok := t.resolve(n); ok {
-			heights = append(heights, h)
+	heights = append(heights, n)
+	for _, lookback := range lookbacks {
+		if lookback > n {
+			fmt.Fprintf(os.Stderr, "warning: skipping lookback %d because latest height is %d\n", lookback, n)
+			continue
 		}
+		heights = append(heights, n-lookback)
 	}
 
 	// Fetch timestamps
@@ -118,11 +142,11 @@ func main() {
 	)
 
 	// 6) Pretty per-reference output
-	for _, t := range targets {
-		h, ok := t.resolve(n)
-		if !ok || h == n {
+	for _, lookback := range lookbacks {
+		if lookback > n {
 			continue
 		}
+		h := n - lookback
 		src, ok := infos[h]
 		if !ok {
 			continue
@@ -155,31 +179,31 @@ func main() {
 	}
 }
 
-type target struct {
-	kind  string // "relative" or "absolute"
-	delta int64  // for relative
-	value uint64 // for absolute
+func isHelpCommand(arg string) bool {
+	return arg == "help" || arg == "-help" || arg == "--help" || arg == "-h"
 }
 
-func (t target) resolve(n uint64) (uint64, bool) {
-	switch t.kind {
-	case "relative":
-		if t.delta >= 0 {
-			return n + uint64(t.delta), true
+func parseLookbacks(raw string) ([]uint64, error) {
+	parts := strings.Split(raw, ",")
+	lookbacks := make([]uint64, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
 		}
-		d := uint64(-t.delta)
-		if d > n {
-			return 0, false
+		lookback, err := strconv.ParseUint(part, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid lookback %q: %w", part, err)
 		}
-		return n - d, true
-	case "absolute":
-		if t.value > n {
-			return 0, false
+		if lookback == 0 {
+			return nil, fmt.Errorf("lookback must be greater than zero")
 		}
-		return t.value, true
-	default:
-		return 0, false
+		lookbacks = append(lookbacks, lookback)
 	}
+	if len(lookbacks) == 0 {
+		return nil, fmt.Errorf("at least one lookback is required")
+	}
+	return lookbacks, nil
 }
 
 func getLatestBlockNumber(ctx context.Context, client *http.Client, rpcURL string) (uint64, error) {
@@ -222,6 +246,12 @@ func rpcCall[T any](ctx context.Context, client *http.Client, rpcURL, method str
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
+			time.Sleep(retryBackoff * time.Duration(attempt+1))
+			continue
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			resp.Body.Close()
 			time.Sleep(retryBackoff * time.Duration(attempt+1))
 			continue
 		}
@@ -297,4 +327,9 @@ func elapsedDHMS(totalSec int64) string {
 	m := r / 60
 	s := r % 60
 	return fmt.Sprintf("%dd %dh %dm %ds", d, h, m, s)
+}
+
+func failf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", a...)
+	os.Exit(1)
 }

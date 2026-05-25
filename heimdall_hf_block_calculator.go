@@ -1,16 +1,5 @@
-/*
-How to run?
-`go run heimdall_hf_block_calculator.go`
-
-What does it do?
-TLDR: It predicts the **future block height** for a given target UTC time and average block time.
-1. Fetch the current block height and timestamp.
-2. Parse the hardcoded target timestamp.
-3. Calculate the time difference (delta) between now and the target.
-4. Divide delta by the average block time to estimate number of blocks.
-5. Add blocks to current height -> predicted future block height.
-6. Print the predicted height and time delta (in days, hours, minutes, seconds).
-*/
+// go run heimdall_hf_block_calculator.go -rpc="https://tendermint-api.polygon.technology" -target="2026-06-01T14:00:00Z" -avg=1.30
+// go run heimdall_hf_block_calculator.go help
 
 package main
 
@@ -19,12 +8,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 )
-
-const defaultBase = "https://tendermint-api.polygon.technology"
 
 type statusResp struct {
 	Result struct {
@@ -37,48 +27,117 @@ type statusResp struct {
 }
 
 func main() {
-	base := flag.String("base", defaultBase, "Base URL for the Tendermint RPC-compatible API")
-	timeout := flag.Duration("timeout", 15*time.Second, "HTTP request timeout")
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	rpcURL := fs.String("rpc", "", "Heimdall Tendermint RPC base URL")
+	baseAlias := fs.String("base", "", "Alias for -rpc")
+	targetStr := fs.String("target", "", "Target UTC time in RFC3339/RFC3339Nano format")
+	avgSecs := fs.Float64("avg", 0, "Average block time in seconds")
+	timeout := fs.Duration("timeout", 15*time.Second, "HTTP request timeout")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  go run heimdall_hf_block_calculator.go -rpc=<heimdall-rpc-url> -target=<utc-time> -avg=<seconds> [options]\n  go run heimdall_hf_block_calculator.go help\n\n")
+		fmt.Fprintln(fs.Output(), "Predicts the Heimdall block height for a target UTC timestamp using the current chain head and an average block time.")
+		fmt.Fprintln(fs.Output(), "\nRequired:")
+		fmt.Fprintln(fs.Output(), "  -rpc string")
+		fmt.Fprintln(fs.Output(), "        Heimdall Tendermint RPC base URL for the network being scheduled")
+		fmt.Fprintln(fs.Output(), "  -target string")
+		fmt.Fprintln(fs.Output(), "        Target UTC time in RFC3339/RFC3339Nano format, for example 2026-06-01T14:00:00Z")
+		fmt.Fprintln(fs.Output(), "  -avg float")
+		fmt.Fprintln(fs.Output(), "        Average block time in seconds, usually copied from heimdall_average_blocktime_calculator.go")
+		fmt.Fprintln(fs.Output(), "\nOptions:")
+		fs.PrintDefaults()
+		fmt.Fprintln(fs.Output(), "\nExamples:")
+		fmt.Fprintln(fs.Output(), "  go run heimdall_hf_block_calculator.go -rpc=https://tendermint-api.polygon.technology -target=2026-06-01T14:00:00Z -avg=1.30")
+		fmt.Fprintln(fs.Output(), "  go run heimdall_hf_block_calculator.go -rpc=https://tendermint-api-amoy.polygon.technology -target=2026-06-01T14:00:00Z -avg=1.25")
+	}
+	if len(os.Args) > 1 && isHelpCommand(os.Args[1]) {
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		failf("%v", err)
+	}
+	if strings.TrimSpace(*baseAlias) != "" {
+		*rpcURL = *baseAlias
+	}
+	missing := missingRequiredFlags(fs, *rpcURL, *targetStr)
+	if len(missing) > 0 {
+		failf("missing required options: %s\n\nRequired inputs:\n  -rpc    Heimdall Tendermint RPC base URL for the network being scheduled.\n  -target Hardfork target time in UTC RFC3339 format, for example 2026-06-01T14:00:00Z.\n  -avg    Positive average Heimdall block time in seconds, usually copied from `heimdall_average_blocktime_calculator.go`.\n\nExamples:\n  mainnet: go run heimdall_hf_block_calculator.go -rpc=https://tendermint-api.polygon.technology -target=2026-06-01T14:00:00Z -avg=1.30\n  amoy   : go run heimdall_hf_block_calculator.go -rpc=https://tendermint-api-amoy.polygon.technology -target=2026-06-01T14:00:00Z -avg=1.25\n\nRun `go run heimdall_hf_block_calculator.go help` for all options.", strings.Join(missing, ", "))
+	}
+	if *avgSecs <= 0 {
+		failf("invalid -avg: %.6f\n\nProvide a positive average Heimdall block time in seconds, usually copied from `heimdall_average_blocktime_calculator.go`.\nExample:\n  -avg=1.30\n\nRun `go run heimdall_hf_block_calculator.go help` for all options.", *avgSecs)
+	}
+	targetTime, err := parseTarget(*targetStr)
+	if err != nil {
+		failf("parse target time: %v", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-	defer cancel()
-
+	ctx := context.Background()
 	httpc := &http.Client{Timeout: *timeout}
 
-	// Get current height + time
-	latestHeight, latestTime, _, err := getLatest(ctx, httpc, *base)
+	latestHeight, latestTime, _, err := getLatest(ctx, httpc, *rpcURL)
 	if err != nil {
-		panic(fmt.Errorf("get latest: %w", err))
-	}
-	fmt.Printf("Current block: %d at %s\n\n",
-		latestHeight, latestTime.Format(time.RFC3339Nano))
-
-	// --- FUTURE BLOCK CALCULATION ---
-	// Hardcode arguments here:
-	targetTimeStr := "2025-09-16T14:00:00.00000000Z"
-	avgBlockTime := 1.30 // seconds
-
-	targetTime, err := time.Parse(time.RFC3339Nano, targetTimeStr)
-	if err != nil {
-		panic(fmt.Errorf("parse target time: %w", err))
+		failf("get latest: %v", err)
 	}
 
 	delta := targetTime.Sub(latestTime)
-	if delta < 0 {
-		fmt.Printf("Target time %s is in the past relative to latest block.\n", targetTime.Format(time.RFC3339))
-		return
+	deltaSeconds := delta.Seconds()
+	blocksFloat := deltaSeconds / *avgSecs
+	blocksRounded := int64(math.Round(blocksFloat))
+	predicted := latestHeight + blocksRounded
+	if predicted < 0 {
+		predicted = 0
 	}
 
-	blocksToAdd := int64(delta.Seconds() / avgBlockTime)
-	predicted := latestHeight + blocksToAdd
+	sign := "+"
+	if delta < 0 {
+		sign = "-"
+	}
 
-	fmt.Println("Future block prediction:")
-	fmt.Printf("  target time     : %s\n", targetTime.Format(time.RFC3339))
-	fmt.Printf("  avg block time  : %.2f s\n", avgBlockTime)
-	fmt.Printf("  time delta      : %dd %dh %dm %ds\n", int(delta.Hours())/24, int(delta.Hours())%24, int(delta.Minutes())%60, int(delta.Seconds())%60)
-	fmt.Printf("  blocks to add   : %d\n", blocksToAdd)
-	fmt.Printf("  predicted height: %d\n", predicted)
+	fmt.Printf("Current block : %s at %s\n", withCommasInt64(latestHeight), latestTime.UTC().Format(time.RFC3339))
+	fmt.Printf("Target time   : %s (UTC)\n", targetTime.Format(time.RFC3339))
+	fmt.Printf("Avg block     : %.6f s\n", *avgSecs)
+	fmt.Printf("\nΔtime         : %s%s (%s s)\n", sign, elapsedDHMS(delta), withCommasInt64(int64(math.Abs(deltaSeconds))))
+	fmt.Printf("Estimated Δblk: %s%s (rounded) — %.3f (exact)\n", sign, withCommasInt64(absInt64(blocksRounded)), blocksFloat)
+	fmt.Printf("\nPredicted block at target:\n")
+	fmt.Printf("  height      : %s\n", withCommasInt64(predicted))
+}
+
+func isHelpCommand(arg string) bool {
+	return arg == "help" || arg == "-help" || arg == "--help" || arg == "-h"
+}
+
+func missingRequiredFlags(fs *flag.FlagSet, rpcURL, targetStr string) []string {
+	var missing []string
+	if strings.TrimSpace(rpcURL) == "" {
+		missing = append(missing, "-rpc")
+	}
+	if strings.TrimSpace(targetStr) == "" {
+		missing = append(missing, "-target")
+	}
+	if !flagWasProvided(fs, "avg") {
+		missing = append(missing, "-avg")
+	}
+	return missing
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
+}
+
+func parseTarget(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unsupported time format %q (use RFC3339/RFC3339Nano, e.g. 2026-06-01T14:00:00Z)", s)
 }
 
 func getLatest(ctx context.Context, c *http.Client, base string) (height int64, t time.Time, earliest int64, err error) {
@@ -123,3 +182,54 @@ func getJSON(ctx context.Context, c *http.Client, url string, out any) error {
 	return dec.Decode(out)
 }
 
+func elapsedDHMS(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	totalSec := int64(d.Seconds())
+	dd := totalSec / 86400
+	r := totalSec % 86400
+	hh := r / 3600
+	r %= 3600
+	mm := r / 60
+	ss := r % 60
+	return fmt.Sprintf("%dd %dh %dm %ds", dd, hh, mm, ss)
+}
+
+func withCommasInt64(v int64) string {
+	if v < 0 {
+		return "-" + withCommasUint64(uint64(-v))
+	}
+	return withCommasUint64(uint64(v))
+}
+
+func withCommasUint64(u uint64) string {
+	s := fmt.Sprintf("%d", u)
+	n := len(s)
+	if n <= 3 {
+		return s
+	}
+	var b strings.Builder
+	pre := n % 3
+	if pre == 0 {
+		pre = 3
+	}
+	b.WriteString(s[:pre])
+	for i := pre; i < n; i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
+}
+
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func failf(format string, a ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", a...)
+	os.Exit(1)
+}

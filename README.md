@@ -1,67 +1,159 @@
-# 🛠️ Chain Utils
+# Chain Utils
 
-A personal collection of blockchain infrastructure scripts and utilities — built for developers working on validator nodes, chain monitoring, or custom on-chain tooling.
+Standalone Go scripts for estimating Polygon PoS block timings and hardfork
+activation heights on Bor and Heimdall.
 
----
+The hardfork calculators are intended to be used in pairs:
 
-## 🔍 What's Inside
+1. Run the matching average block time calculator against the target network.
+2. Choose the average window you want to schedule from.
+3. Pass that average block time and the target UTC timestamp into the matching
+   hardfork block calculator.
 
-| Script | Description |
-|--------|-------------|
-| `bor_average_blocktime_calculator.go` | Calculates the average block time over the last 40k, 280k, 560k, and 1.12M blocks on the Bor chain. Useful for chain health monitoring and block production analysis. |
-| `bor_hf_block_calculator.go` | Predicts the block height corresponding to a future target UTC time given an assumed average block time for the Bor chain (e.g. planning for hardforks or upgrades). |
-| `heimdall_average_blocktime_calculator.go` | Calculates the average block time over the last 10k, 100k, 1M, and 1.5M blocks. Useful for chain health monitoring and block production analysis. |
-| `heimdall_hf_block_calculator.go`        | Predicts the block height corresponding to a future target UTC time given an assumed average block time (e.g. planning for hardforks or upgrades). |
+Run each script directly with `go run <script>.go`. The scripts are independent
+`package main` files, so do not run `go run .`.
 
----
+## Scripts
 
-## 🚀 Quick Start
+| Script | Purpose |
+| --- | --- |
+| `bor_average_blocktime_calculator.go` | Calculates Bor average block time over configurable lookback windows. |
+| `bor_hf_block_calculator.go` | Predicts the Bor block height for a target UTC timestamp. |
+| `heimdall_average_blocktime_calculator.go` | Calculates Heimdall average block time over configurable lookback windows. |
+| `heimdall_hf_block_calculator.go` | Predicts the Heimdall block height for a target UTC timestamp. |
 
-### Example 1: Calculate Bor Average Block Times
-
-```bash
-go run bor_average_blocktime_calculator.go
-```
-
-This script
-- Fetches the latest block height and timestamp from Bor RPC
-- For each lookback (40k, 280k, 560k, 1.12M blocks), fetches a past block
-- Prints elapsed time (days/hours/minutes/seconds) and average block time in seconds
-
-
-### Example 2: Predict Bor Block Height at a Future Time
+Every script supports:
 
 ```bash
-go run bor_hf_block_calculator.go
+go run <script>.go help
+go run <script>.go -help
 ```
 
-This script
-- Fetches the latest block height and timestamp from Bor RPC
-- Uses a configurable target UTC timestamp and average block time
-- Calculates how many blocks fit in the delta between now and target
-- Prints the predicted block height and time delta
+## Bor Average Block Time
 
-
-### Example 3: Calculate Heimdall Average Block Times
+For mainnet Bor, set `BOR_MAINNET_RPC` to an authenticated JSON-RPC endpoint
+before running the examples below.
 
 ```bash
-go run heimdall_average_blocktime_calculator.go
+go run bor_average_blocktime_calculator.go \
+  -rpc=$BOR_MAINNET_RPC \
+  -lookbacks=40000,280000,560000,1120000
 ```
 
-This script
-- Fetches the latest block height and timestamp from Heimdall APIs
-- For each lookback (10k, 100k, 1M, 1.5M blocks), fetches a past block
-- Prints elapsed time (days/hours/minutes/seconds) and average block time in seconds
+Common options:
 
+| Option | Description | Default |
+| --- | --- | --- |
+| `-rpc` | Required. Bor JSON-RPC endpoint for the network being scheduled. | none |
+| `-lookbacks` | Comma-separated block distances from the latest block. | `40000,280000,560000,1120000` |
+| `-timeout` | HTTP request timeout. | `20s` |
 
-### Example 4: Predict Heimdall Block Height at a Future Time
+Amoy example:
 
 ```bash
-go run heimdall_hf_block_calculator.go
+go run bor_average_blocktime_calculator.go \
+  -rpc=https://rpc-amoy.polygon.technology \
+  -lookbacks=10000,50000,100000
 ```
 
-This script
-- Fetches the latest block height and timestamp from Heimdall APIs
-- Uses a hardcoded target UTC timestamp and an average block time (in seconds)
-- Calculates how many blocks fit in the delta between now and target
-- Prints the predicted block height and time delta
+## Bor Hardfork Block
+
+```bash
+go run bor_hf_block_calculator.go \
+  -rpc=$BOR_MAINNET_RPC \
+  -target=2026-06-01T14:00:00Z \
+  -avg=2.156
+```
+
+Required options:
+
+| Option | Description |
+| --- | --- |
+| `-rpc` | Bor JSON-RPC endpoint for the network being scheduled. |
+| `-target` | Target UTC timestamp in RFC3339 or RFC3339Nano format. |
+| `-avg` | Average Bor block time in seconds. Use a value from `bor_average_blocktime_calculator.go`. |
+
+Common options:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-timeout` | HTTP request timeout. | `20s` |
+
+Amoy example:
+
+```bash
+go run bor_hf_block_calculator.go \
+  -rpc=https://rpc-amoy.polygon.technology \
+  -target=2026-06-01T14:00:00Z \
+  -avg=2.1
+```
+
+## Heimdall Average Block Time
+
+```bash
+go run heimdall_average_blocktime_calculator.go \
+  -rpc=https://tendermint-api.polygon.technology \
+  -lookbacks=10000,100000,1000000,1500000
+```
+
+Common options:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-rpc` | Required. Heimdall Tendermint RPC base URL for the network being scheduled. | none |
+| `-base` | Alias for `-rpc`, kept for older invocations. | empty |
+| `-lookbacks` | Comma-separated block distances from the latest block. | `10000,100000,1000000,1500000` |
+| `-timeout` | HTTP request timeout. | `15s` |
+
+Amoy example:
+
+```bash
+go run heimdall_average_blocktime_calculator.go \
+  -rpc=https://tendermint-api-amoy.polygon.technology \
+  -lookbacks=10000,50000,100000
+```
+
+## Heimdall Hardfork Block
+
+```bash
+go run heimdall_hf_block_calculator.go \
+  -rpc=https://tendermint-api.polygon.technology \
+  -target=2026-06-01T14:00:00Z \
+  -avg=1.30
+```
+
+Required options:
+
+| Option | Description |
+| --- | --- |
+| `-rpc` | Heimdall Tendermint RPC base URL for the network being scheduled. |
+| `-target` | Target UTC timestamp in RFC3339 or RFC3339Nano format. |
+| `-avg` | Average Heimdall block time in seconds. Use a value from `heimdall_average_blocktime_calculator.go`. |
+
+Common options:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-base` | Alias for `-rpc`, kept for older invocations. | empty |
+| `-timeout` | HTTP request timeout. | `15s` |
+
+Amoy example:
+
+```bash
+go run heimdall_hf_block_calculator.go \
+  -rpc=https://tendermint-api-amoy.polygon.technology \
+  -target=2026-06-01T14:00:00Z \
+  -avg=1.25
+```
+
+## Scheduling Notes
+
+- Always use the endpoint for the same network you are scheduling.
+- Use UTC timestamps with an explicit `Z` suffix, for example
+  `2026-06-01T14:00:00Z`.
+- Re-run the average calculation close to the final proposal time. Block times
+  drift with network conditions.
+- Compare multiple lookback windows before choosing the `-avg` value. Short
+  windows react faster; long windows smooth out transient variance.
+- Treat the predicted block as an estimate until it is cross-checked against
+  current network state and release-specific hardfork requirements.

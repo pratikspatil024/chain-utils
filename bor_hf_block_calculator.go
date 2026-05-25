@@ -1,5 +1,5 @@
-// go run bor_hf_block_calculator.go
-// go run bor_hf_block_calculator.go -rpc="https://polygon-rpc.com -target="2025-10-07T14:00:00Z" -avg=2.156
+// go run bor_hf_block_calculator.go -rpc="$BOR_MAINNET_RPC" -target="2026-06-01T14:00:00Z" -avg=2.156
+// go run bor_hf_block_calculator.go help
 
 package main
 
@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	defaultRPC   = "https://polygon-rpc.com"
 	jsonrpcVer   = "2.0"
 	httpTimeout  = 20 * time.Second
 	maxRetries   = 3
@@ -49,13 +48,48 @@ type block struct {
 }
 
 func main() {
-	// You can change defaults or pass flags.
-	rpcURL := flag.String("rpc", defaultRPC, "Polygon (Bor) JSON-RPC endpoint")
-	targetStr := flag.String("target", "2025-10-07T14:00:00.00000000Z", "Target time in RFC3339 or RFC3339Nano (UTC)")
-	avgSecs := flag.Float64("avg", 2.15, "Average block time in seconds (e.g., 2.15)")
-	flag.Parse()
+	fs := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	rpcURL := fs.String("rpc", "", "Bor JSON-RPC endpoint")
+	targetStr := fs.String("target", "", "Target UTC time in RFC3339/RFC3339Nano format")
+	avgSecs := fs.Float64("avg", 0, "Average block time in seconds")
+	timeout := fs.Duration("timeout", httpTimeout, "HTTP request timeout")
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage:\n  go run bor_hf_block_calculator.go -rpc=<bor-rpc-url> -target=<utc-time> -avg=<seconds> [options]\n  go run bor_hf_block_calculator.go help\n\n")
+		fmt.Fprintln(fs.Output(), "Predicts the Bor block height for a target UTC timestamp using the current chain head and an average block time.")
+		fmt.Fprintln(fs.Output(), "\nRequired:")
+		fmt.Fprintln(fs.Output(), "  -rpc string")
+		fmt.Fprintln(fs.Output(), "        Bor JSON-RPC endpoint for the network being scheduled")
+		fmt.Fprintln(fs.Output(), "  -target string")
+		fmt.Fprintln(fs.Output(), "        Target UTC time in RFC3339/RFC3339Nano format, for example 2026-06-01T14:00:00Z")
+		fmt.Fprintln(fs.Output(), "  -avg float")
+		fmt.Fprintln(fs.Output(), "        Average block time in seconds, usually copied from bor_average_blocktime_calculator.go")
+		fmt.Fprintln(fs.Output(), "\nOptions:")
+		fs.PrintDefaults()
+		fmt.Fprintln(fs.Output(), "\nExamples:")
+		fmt.Fprintln(fs.Output(), "  BOR_MAINNET_RPC=https://your-mainnet-bor-rpc.example")
+		fmt.Fprintln(fs.Output(), "  go run bor_hf_block_calculator.go -rpc=$BOR_MAINNET_RPC -target=2026-06-01T14:00:00Z -avg=2.156")
+		fmt.Fprintln(fs.Output(), "  go run bor_hf_block_calculator.go -rpc=https://rpc-amoy.polygon.technology -target=2026-06-01T14:00:00Z -avg=2.1")
+	}
+	if len(os.Args) > 1 && isHelpCommand(os.Args[1]) {
+		fs.Usage()
+		return
+	}
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		failf("%v", err)
+	}
+	missing := missingRequiredFlags(fs, *rpcURL, *targetStr)
+	if len(missing) > 0 {
+		failf("missing required options: %s\n\nRequired inputs:\n  -rpc    Bor JSON-RPC endpoint for the network being scheduled.\n  -target Hardfork target time in UTC RFC3339 format, for example 2026-06-01T14:00:00Z.\n  -avg    Positive average Bor block time in seconds, usually copied from `bor_average_blocktime_calculator.go`.\n\nExamples:\n  mainnet: go run bor_hf_block_calculator.go -rpc=https://your-mainnet-bor-rpc.example -target=2026-06-01T14:00:00Z -avg=2.156\n  amoy   : go run bor_hf_block_calculator.go -rpc=https://rpc-amoy.polygon.technology -target=2026-06-01T14:00:00Z -avg=2.1\n\nRun `go run bor_hf_block_calculator.go help` for all options.", strings.Join(missing, ", "))
+	}
+	if *avgSecs <= 0 {
+		failf("invalid -avg: %.6f\n\nProvide a positive average Bor block time in seconds, usually copied from `bor_average_blocktime_calculator.go`.\nExample:\n  -avg=2.156\n\nRun `go run bor_hf_block_calculator.go help` for all options.", *avgSecs)
+	}
+	target, err := parseTarget(*targetStr)
+	if err != nil {
+		failf("parse target time: %v", err)
+	}
 
-	client := &http.Client{Timeout: httpTimeout}
+	client := &http.Client{Timeout: *timeout}
 	ctx := context.Background()
 
 	// 1) Fetch current block height and timestamp
@@ -68,12 +102,6 @@ func main() {
 		failf("get timestamp for current block %d: %v", n, err)
 	}
 	now := time.Unix(int64(curTS), 0).UTC()
-
-	// 2) Parse target time
-	target, err := parseTarget(*targetStr)
-	if err != nil {
-		failf("parse target time: %v", err)
-	}
 
 	// 3) Calculate time delta
 	delta := target.Sub(now)
@@ -106,6 +134,34 @@ func main() {
 	fmt.Printf("  height      : %s\n", withCommasUint64(uint64(predicted)))
 }
 
+func isHelpCommand(arg string) bool {
+	return arg == "help" || arg == "-help" || arg == "--help" || arg == "-h"
+}
+
+func missingRequiredFlags(fs *flag.FlagSet, rpcURL, targetStr string) []string {
+	var missing []string
+	if strings.TrimSpace(rpcURL) == "" {
+		missing = append(missing, "-rpc")
+	}
+	if strings.TrimSpace(targetStr) == "" {
+		missing = append(missing, "-target")
+	}
+	if !flagWasProvided(fs, "avg") {
+		missing = append(missing, "-avg")
+	}
+	return missing
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
+}
+
 func parseTarget(s string) (time.Time, error) {
 	// Try RFC3339Nano first, then RFC3339
 	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
@@ -114,7 +170,7 @@ func parseTarget(s string) (time.Time, error) {
 	if t, err := time.Parse(time.RFC3339, s); err == nil {
 		return t.UTC(), nil
 	}
-	return time.Time{}, fmt.Errorf("unsupported time format %q (use RFC3339/RFC3339Nano, e.g. 2025-10-07T14:00:00Z)", s)
+	return time.Time{}, fmt.Errorf("unsupported time format %q (use RFC3339/RFC3339Nano, e.g. 2026-06-01T14:00:00Z)", s)
 }
 
 func getLatestBlockNumber(ctx context.Context, client *http.Client, rpcURL string) (uint64, error) {
@@ -157,6 +213,12 @@ func rpcCall[T any](ctx context.Context, client *http.Client, rpcURL, method str
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
+			time.Sleep(retryBackoff * time.Duration(attempt+1))
+			continue
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			resp.Body.Close()
 			time.Sleep(retryBackoff * time.Duration(attempt+1))
 			continue
 		}
@@ -234,8 +296,7 @@ func absInt64(v int64) int64 {
 }
 
 func elapsedDHMS(d time.Duration) string {
-	neg := d < 0
-	if neg {
+	if d < 0 {
 		d = -d
 	}
 	totalSec := int64(d.Seconds())
@@ -245,11 +306,7 @@ func elapsedDHMS(d time.Duration) string {
 	r %= 3600
 	mm := r / 60
 	ss := r % 60
-	prefix := ""
-	if neg {
-		prefix = "-"
-	}
-	return fmt.Sprintf("%s%dd %dh %dm %ds", prefix, dd, hh, mm, ss)
+	return fmt.Sprintf("%dd %dh %dm %ds", dd, hh, mm, ss)
 }
 
 func failf(format string, a ...any) {
