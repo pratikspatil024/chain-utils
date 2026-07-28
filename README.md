@@ -10,6 +10,9 @@ The hardfork calculators are intended to be used in pairs:
 3. Pass that average block time and the target UTC timestamp into the matching
    hardfork block calculator.
 
+For the inverse calculation—estimating when a known Heimdall height will be
+reached—pass that same measured average to the Heimdall block-time estimator.
+
 Run each script directly with `go run <script>.go`. The scripts are independent
 `package main` files, so do not run `go run .`.
 
@@ -19,8 +22,10 @@ Run each script directly with `go run <script>.go`. The scripts are independent
 | --- | --- |
 | `bor_average_blocktime_calculator.go` | Calculates Bor average block time over configurable lookback windows. |
 | `bor_hf_block_calculator.go` | Predicts the Bor block height for a target UTC timestamp. |
+| `bor_block_time_estimator.go` | Predicts when Bor will reach a target block height. |
 | `heimdall_average_blocktime_calculator.go` | Calculates Heimdall average block time over configurable lookback windows. |
 | `heimdall_hf_block_calculator.go` | Predicts the Heimdall block height for a target UTC timestamp. |
+| `heimdall_block_time_estimator.go` | Predicts when Heimdall will reach a target block height. |
 
 Every script supports:
 
@@ -88,6 +93,32 @@ go run bor_hf_block_calculator.go \
   -avg=2.1
 ```
 
+## Bor Block-Time Estimator
+
+Use this for the inverse of the hardfork calculator: provide a known target
+height and the average block time measured by the Bor average calculator.
+
+```bash
+go run bor_block_time_estimator.go \
+  -rpc=$BOR_MAINNET_RPC \
+  -target=80000000 \
+  -avg=2.156
+```
+
+Required options:
+
+| Option | Description |
+| --- | --- |
+| `-rpc` | Bor JSON-RPC endpoint for the network being scheduled. |
+| `-target` | Target Bor block height. Commas are accepted for readability. |
+| `-avg` | Average Bor block time in seconds. Use a value from `bor_average_blocktime_calculator.go`. |
+
+Common options:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-timeout` | HTTP request timeout. | `20s` |
+
 ## Heimdall Average Block Time
 
 ```bash
@@ -145,6 +176,33 @@ go run heimdall_hf_block_calculator.go \
   -target=2026-06-01T14:00:00Z \
   -avg=1.25
 ```
+
+## Heimdall Block-Time Estimator
+
+Use this for the inverse of the hardfork calculator: provide a known target
+height and the average block time measured by the Heimdall average calculator.
+
+```bash
+go run heimdall_block_time_estimator.go \
+  -rpc=https://tendermint-api.polygon.technology \
+  -target=50185000 \
+  -avg=1.30
+```
+
+Required options:
+
+| Option | Description |
+| --- | --- |
+| `-rpc` | Heimdall Tendermint RPC base URL for the network being scheduled. |
+| `-target` | Target Heimdall block height. Commas are accepted for readability. |
+| `-avg` | Average Heimdall block time in seconds. Use a value from `heimdall_average_blocktime_calculator.go`. |
+
+Common options:
+
+| Option | Description | Default |
+| --- | --- | --- |
+| `-base` | Alias for `-rpc`, kept for older invocations. | empty |
+| `-timeout` | HTTP request timeout. | `15s` |
 
 ## Scheduling Notes
 
